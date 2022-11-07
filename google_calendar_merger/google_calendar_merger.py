@@ -1,3 +1,5 @@
+import re
+
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
@@ -10,8 +12,8 @@ SCOPES_REQUIRED = [
     
 
 def merge_calendars(source_calendars, dest_calendar, service_account_file,
-        censor=False, censor_name="Busy", delete=True, do_not_include="",
-        verbose=True):
+        censor=False, censor_name="Busy", censor_desc="", delete=True, 
+        do_not_include="", verbose=True):
     """
     Merges two google calendar's into another (by default, the second one)
 
@@ -57,17 +59,23 @@ def merge_calendars(source_calendars, dest_calendar, service_account_file,
         # Filter source events that don't have start, end, and title
         source_events = [
             event for event in source_events
-            if (    event.get('start', None) 
-                and event.get('end', None) 
-                and event.get('start', None))
+            if (    event.get('summary', None) 
+                and event.get('start', None) 
+                and event.get('end', None))
+        ]
+
+        # Filter dest events that don't have summary 
+        source_events = [
+            event for event in source_events
+            if event.get('summary', None)
         ]
 
         # Filter source events that match do_not_include
         if do_not_include:
             source_events = [
                 event for event in source_events
-                if (    re.match(do_not_include, event.get('summary'))
-                     or re.match(do_not_include, event.get('description')))
+                if not (    re.match(do_not_include, event.get('summary',''), flags=re.I)
+                         or re.match(do_not_include, event.get('description',''), flags=re.I))
             ]
 
         # Remove event organizer and creator
@@ -76,33 +84,49 @@ def merge_calendars(source_calendars, dest_calendar, service_account_file,
             event.pop("creator", None)
 
         # Censor source events
+        original_events = []
+        for event in source_events:
+            original_events.append({
+                    'summary': event['summary'],
+                    'start': event['start'],
+                    'end': event['end'],
+                    })
+            
         if censor:
             for event in source_events:
                 event['summary'] = censor_name
-                event['description'] = ""
-                del event['location']
+                event['description'] = censor_desc
+                event.pop("location", None)
+        
 
         # Find dest events not in source events and source events already in
         # dest
         remove_events = []
-        for dest_event in dest_events:
+        for d_event in dest_events:
             found_event = False
-            for source_event in source_events:
-                if (    dest_event.get('summary', None) 
-                            == source_event.get('summary', None)
-                    and dest_event.get('start', None) 
-                            == source_event.get('start', None)
-                    and dest_event.get('end', None) 
-                            == source_event.get('end', None)):
+            for s_event, o_event in zip(source_events, original_events):
+                if (    (  d_event.get('summary', None) 
+                            == o_event.get('summary', None)
+                        or d_event.get('summary', None) 
+                            == s_event.get('summary', None))
+                    and (  d_event.get('start', None) 
+                            == o_event.get('start', None)
+                        or d_event.get('start', None)
+                            == s_event.get('start', None))
+                    and (  d_event.get('end', None) 
+                            == o_event.get('end', None)
+                        or d_event.get('end', None) 
+                            == s_event.get('end', None))):
                     
                     found_event = True
-                    source_events.remove(source_event)
+                    source_events.remove(s_event)
+                    original_events.remove(o_event)
                     break
 
             if found_event:
                 continue
 
-            remove_events.append(dest_event)
+            remove_events.append(d_event)
 
         # Add Source Events not in Destination events
         _add_events(dest_calendar, source_events, service) 
@@ -117,26 +141,38 @@ def merge_calendars(source_calendars, dest_calendar, service_account_file,
 def _add_events(calendarId, events, service):
     "Adds events to a calendar"
     if isinstance(events, dict):
-        print(f"Adding {events.get('summary', '')}")
-        service.events().import_(calendarId=calendarId, body=events).execute()
+        try:
+            service.events().import_(calendarId=calendarId, body=events).execute()
+            print(f"Adding {events.get('summary', '')}")
+        except:
+            print(f"Failed to add {events.get('summary', '')}")
     else:
         try:
             for event in events:
-                print(f"Adding {event.get('summary', '')}")
-                service.events().import_(calendarId=calendarId, body=event).execute()
+                try:
+                    service.events().import_(calendarId=calendarId, body=event).execute()
+                    print(f"Adding {event.get('summary', '')}")
+                except HttpError:
+                    print(f"Failed to add {event.get('summary', '')}")
         except TypeError as err:
             print(err)
 
 def _delete_events(calendarId, events, service):
     "Removes events from a calendar"
     if isinstance(events, dict):
-        print(f"Removing {events.get('summary', '')}")
-        service.events().delete(calendarId=calendarId, eventId=events['id']).execute()
+        try:
+            service.events().delete(calendarId=calendarId, eventId=events['id']).execute()
+            print(f"Removing {events.get('summary', '')}")
+        except HttpError:
+            print(f"Failed to remove {events.get('summary', '')}")
     else:
         try:
             for event in events:
-                print(f"Removing {event.get('summary', '')}")
-                service.events().delete(calendarId=calendarId, eventId=event['id']).execute()
+                try:
+                    service.events().delete(calendarId=calendarId, eventId=event['id']).execute()
+                    print(f"Removing {event.get('summary', '')}")
+                except HttpError:
+                    print(f"Failed to remove {event.get('summary', '')}")
         except TypeError as err:
             print(err)
 
