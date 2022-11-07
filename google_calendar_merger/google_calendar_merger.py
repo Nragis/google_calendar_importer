@@ -10,7 +10,8 @@ SCOPES_REQUIRED = [
     
 
 def merge_calendars(source_calendars, dest_calendar, service_account_file,
-        censor=False, censor_name="Busy", delete=True, do_not_include=None):
+        censor=False, censor_name="Busy", delete=True, do_not_include="",
+        verbose=True):
     """
     Merges two google calendar's into another (by default, the second one)
 
@@ -56,22 +57,23 @@ def merge_calendars(source_calendars, dest_calendar, service_account_file,
         # Filter source events that don't have start, end, and title
         source_events = [
             event for event in source_events
-            if not (    event.get('start', None) 
-                    and event.get('end', None) 
-                    and event.get('start', None))
+            if (    event.get('start', None) 
+                and event.get('end', None) 
+                and event.get('start', None))
         ]
 
         # Filter source events that match do_not_include
-        source_events = [
-            event for event in source_events
-            if (    re.match(do_not_include, event.get('summary'))
-                 or re.match(do_not_include, event.get('description')))
-        ]
+        if do_not_include:
+            source_events = [
+                event for event in source_events
+                if (    re.match(do_not_include, event.get('summary'))
+                     or re.match(do_not_include, event.get('description')))
+            ]
 
-        # TODO Remove event organizer and creator
+        # Remove event organizer and creator
         for event in source_events:
-            del event['creator']
-            del event['organizer']
+            event.pop("organizer", None)
+            event.pop("creator", None)
 
         # Censor source events
         if censor:
@@ -80,7 +82,8 @@ def merge_calendars(source_calendars, dest_calendar, service_account_file,
                 event['description'] = ""
                 del event['location']
 
-        # Find dest events not in source events
+        # Find dest events not in source events and source events already in
+        # dest
         remove_events = []
         for dest_event in dest_events:
             found_event = False
@@ -93,6 +96,7 @@ def merge_calendars(source_calendars, dest_calendar, service_account_file,
                             == source_event.get('end', None)):
                     
                     found_event = True
+                    source_events.remove(source_event)
                     break
 
             if found_event:
@@ -100,30 +104,11 @@ def merge_calendars(source_calendars, dest_calendar, service_account_file,
 
             remove_events.append(dest_event)
 
-        # Filter source events already in destination
-        for source_event in source_events:
-            found_event = False
-            for dest_event in dest_events:
-                if (    dest_event.get('summary', None) 
-                            == source_event.get('summary', None)
-                    and dest_event.get('start', None) 
-                            == source_event.get('start', None)
-                    and dest_event.get('end', None) 
-                            == source_event.get('end', None)):
-                    
-                    found_event = True
-                    break
-
-            if found_event:
-                continue
-
-            source_events.remove(source_event)
-
         # Add Source Events not in Destination events
         _add_events(dest_calendar, source_events, service) 
 
         # Delete destination events not in source events
-        if delete_events:
+        if delete:
             _delete_events(dest_calendar, remove_events, service)
 
     except HttpError as err:
@@ -132,23 +117,27 @@ def merge_calendars(source_calendars, dest_calendar, service_account_file,
 def _add_events(calendarId, events, service):
     "Adds events to a calendar"
     if isinstance(events, dict):
+        print(f"Adding {events.get('summary', '')}")
         service.events().import_(calendarId=calendarId, body=events).execute()
     else:
         try:
             for event in events:
+                print(f"Adding {event.get('summary', '')}")
                 service.events().import_(calendarId=calendarId, body=event).execute()
-        except TypeError:
+        except TypeError as err:
             print(err)
 
 def _delete_events(calendarId, events, service):
     "Removes events from a calendar"
     if isinstance(events, dict):
-        service.events().delete(calendarId=calendarId, body=events).execute()
+        print(f"Removing {events.get('summary', '')}")
+        service.events().delete(calendarId=calendarId, eventId=events['id']).execute()
     else:
         try:
             for event in events:
-                service.events().delete(calendarId=calendarId, body=event).execute()
-        except TypeError:
+                print(f"Removing {event.get('summary', '')}")
+                service.events().delete(calendarId=calendarId, eventId=event['id']).execute()
+        except TypeError as err:
             print(err)
 
 def _get_events(calendarId, service):
