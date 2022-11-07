@@ -1,1 +1,1 @@
-from .google_calendar_merger import *
+from .import_calendar import *
